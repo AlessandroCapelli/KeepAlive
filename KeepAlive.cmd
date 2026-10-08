@@ -52,6 +52,43 @@ if (-not ('KeepAlive.NativeMethods' -as [type])) {
 public static extern uint SetThreadExecutionState(uint esFlags);
 [DllImport("user32.dll")]
 public static extern short GetAsyncKeyState(int vKey);
+[DllImport("user32.dll", SetLastError = true)]
+private static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+[StructLayout(LayoutKind.Sequential)]
+private struct INPUT { public uint type; public INPUTUNION data; }
+[StructLayout(LayoutKind.Explicit)]
+private struct INPUTUNION {
+    [FieldOffset(0)] public KEYBDINPUT keyboard;
+    [FieldOffset(0)] public MOUSEINPUT mouse;
+}
+[StructLayout(LayoutKind.Sequential)]
+private struct KEYBDINPUT {
+    public ushort key, scan;
+    public uint flags, time;
+    public UIntPtr extraInfo;
+}
+[StructLayout(LayoutKind.Sequential)]
+private struct MOUSEINPUT {
+    public int x, y;
+    public uint mouseData, flags, time;
+    public UIntPtr extraInfo;
+}
+
+public static bool SendActivityKey() {
+    // F15 generates activity without text; skip held modifiers to avoid shortcuts.
+    foreach (int modifier in new int[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }) {
+        if ((GetAsyncKeyState(modifier) & 0x8000) != 0) return false;
+    }
+    INPUT down = new INPUT();
+    down.type = 1;
+    down.data.keyboard.key = 0x7E; // VK_F15
+    INPUT up = down;
+    up.data.keyboard.flags = 2;
+    if (SendInput(2, new INPUT[] { down, up }, Marshal.SizeOf(typeof(INPUT))) != 2)
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Keyboard input failed.");
+    return true;
+}
 '@
 }
 
@@ -323,12 +360,15 @@ function Start-TextSession {
     $writer = $null
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $nextWrite = 1000L
+    $nextActivity = 1000L
+    $activityCount = 0L
     $count = 0L
     $duration = [long]$Script:Config.DurationHours * 3600000
     Clear-Host
     Write-Banner 'TXT session - Q / ESC to stop, or Ctrl+Alt+Q from any window'
     Write-Host "  Appending one character per second to: $Script:TextPath"
-    Write-Host '  Sequence: 424242... | No keyboard input is simulated.'
+    Write-Host '  Background mode: no editor window; F15 activity every 30 seconds.'
+    Write-Host '  You can minimize this console. Stop from any window with Ctrl+Alt+Q.'
     try {
         # Deny other writers to prevent overlapping sessions on the same file.
         $stream = [IO.File]::Open($Script:TextPath, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::Read)
@@ -346,17 +386,25 @@ function Start-TextSession {
                 ([KeepAlive.NativeMethods]::GetAsyncKeyState(0x12) -band 0x8000) -and
                 ([KeepAlive.NativeMethods]::GetAsyncKeyState(0x51) -band 0x8000)
             if ($stop -or $emergencyStop -or ($duration -gt 0 -and $clock.ElapsedMilliseconds -ge $duration)) { break }
+            if ($clock.ElapsedMilliseconds -ge $nextActivity) {
+                if ([KeepAlive.NativeMethods]::SendActivityKey()) {
+                    $activityCount++
+                    $nextActivity = $clock.ElapsedMilliseconds + 30000
+                } else {
+                    $nextActivity = $clock.ElapsedMilliseconds + 1000
+                }
+            }
             if ($clock.ElapsedMilliseconds -ge $nextWrite) {
                 $character = if (($count + $sequenceOffset) % 2 -eq 0) { '4' } else { '2' }
                 $writer.Write($character)
                 $count++
                 $nextWrite = $clock.ElapsedMilliseconds + 1000
-                Write-StatusLine "  Written $count characters | [Q / ESC / Ctrl+Alt+Q] stop"
+                Write-StatusLine "  Written $count characters | activity $activityCount | [Q / ESC / Ctrl+Alt+Q] stop"
             }
             Start-Sleep -Milliseconds 50
         }
     } catch {
-        Write-Event 'TXT session failed. Check file permissions, available space, and other running sessions.' Err
+        Write-Event "TXT session failed: $($_.Exception.Message)" Err
     } finally {
         if ($null -ne $writer) { $writer.Dispose() }
         $clock.Stop()
@@ -669,7 +717,7 @@ function Show-MainMenu {
         Write-Host '  4) Restore original settings'
         Write-Host '  5) Quick diagnostics'
         Write-Host '  6) Restart as administrator'
-        Write-Host '  7) Write 424242... to a TXT file (one character per second)'
+        Write-Host '  7) Background TXT writing + keyboard activity'
         Write-Host '  0) Exit'
         Write-Host ''
         switch (Read-Host '  Choice') {

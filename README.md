@@ -1,7 +1,7 @@
 # KeepAlive
 
 A small Windows utility to keep the PC awake, monitor Wi-Fi, or append
-`424242...` to a TXT file, one character per second.
+`424242...` to a TXT file in the background, one character per second.
 
 ## Getting started
 
@@ -13,21 +13,21 @@ Requires **Windows** and **PowerShell 5.1 or later**. No installation needed.
 
 ## Controls
 
-| Action | Control |
-| --- | --- |
-| Stop a session | **Q** or **Esc** in the console |
-| Stop TXT mode from any window | **Ctrl+Alt+Q** |
-| Set session duration | **Settings** (`0` = unlimited) |
-| Restore optimized settings | Menu option **4** |
+| Action                        | Control                         |
+| ----------------------------- | ------------------------------- |
+| Stop a session                | **Q** or **Esc** in the console |
+| Stop TXT mode from any window | **Ctrl+Alt+Q**                  |
+| Set session duration          | **Settings** (`0` = unlimited)  |
+| Restore optimized settings    | Menu option **4**               |
 
 Protected changes require administrator access. Optimization saves the original
 Windows settings so they can be restored.
 
 ## Local files
 
-| File | Purpose |
-| --- | --- |
+| File                   | Purpose                           |
+| ---------------------- | --------------------------------- |
 | `keepalive.state.json` | Configuration and settings backup |
-| `keepalive.txt` | Generated TXT output |
+| `keepalive.txt`        | Generated TXT output              |
 
 Both files are ignored by Git.
