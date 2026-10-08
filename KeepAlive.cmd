@@ -54,20 +54,15 @@ public static extern uint SetThreadExecutionState(uint esFlags);
 public static extern short GetAsyncKeyState(int vKey);
 [DllImport("user32.dll", SetLastError = true)]
 private static extern uint SendInput(uint count, INPUT[] inputs, int size);
+[DllImport("user32.dll", SetLastError = true)]
+private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+[DllImport("kernel32.dll")]
+private static extern uint GetTickCount();
 
 [StructLayout(LayoutKind.Sequential)]
-private struct INPUT { public uint type; public INPUTUNION data; }
-[StructLayout(LayoutKind.Explicit)]
-private struct INPUTUNION {
-    [FieldOffset(0)] public KEYBDINPUT keyboard;
-    [FieldOffset(0)] public MOUSEINPUT mouse;
-}
+private struct INPUT { public uint type; public MOUSEINPUT mouse; }
 [StructLayout(LayoutKind.Sequential)]
-private struct KEYBDINPUT {
-    public ushort key, scan;
-    public uint flags, time;
-    public UIntPtr extraInfo;
-}
+private struct LASTINPUTINFO { public uint size, time; }
 [StructLayout(LayoutKind.Sequential)]
 private struct MOUSEINPUT {
     public int x, y;
@@ -75,18 +70,24 @@ private struct MOUSEINPUT {
     public UIntPtr extraInfo;
 }
 
-public static bool SendActivityKey() {
-    // F15 generates activity without text; skip held modifiers to avoid shortcuts.
-    foreach (int modifier in new int[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }) {
-        if ((GetAsyncKeyState(modifier) & 0x8000) != 0) return false;
+public static bool SendActivityMouse() {
+    LASTINPUTINFO lastInput = new LASTINPUTINFO();
+    lastInput.size = (uint)Marshal.SizeOf(typeof(LASTINPUTINFO));
+    if (!GetLastInputInfo(ref lastInput))
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Cannot read input activity.");
+    if (unchecked(GetTickCount() - lastInput.time) < 30000) return false;
+    // Avoid interfering with dragging, selections, and modifier gestures.
+    foreach (int key in new int[] { 0x01, 0x02, 0x04, 0x05, 0x06, 0x10, 0x11, 0x12, 0x5B, 0x5C }) {
+        if ((GetAsyncKeyState(key) & 0x8000) != 0) return false;
     }
-    INPUT down = new INPUT();
-    down.type = 1;
-    down.data.keyboard.key = 0x7E; // VK_F15
-    INPUT up = down;
-    up.data.keyboard.flags = 2;
-    if (SendInput(2, new INPUT[] { down, up }, Marshal.SizeOf(typeof(INPUT))) != 2)
-        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Keyboard input failed.");
+    // Submit both relative moves together, without clicks or scrolling.
+    INPUT forward = new INPUT();
+    forward.mouse.x = 1;
+    forward.mouse.flags = 1; // MOUSEEVENTF_MOVE
+    INPUT back = forward;
+    back.mouse.x = -1;
+    if (SendInput(2, new INPUT[] { forward, back }, Marshal.SizeOf(typeof(INPUT))) != 2)
+        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Mouse input failed.");
     return true;
 }
 '@
@@ -360,14 +361,15 @@ function Start-TextSession {
     $writer = $null
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $nextWrite = 1000L
-    $nextActivity = 1000L
+    $nextActivity = 30000L
     $activityCount = 0L
     $count = 0L
     $duration = [long]$Script:Config.DurationHours * 3600000
     Clear-Host
     Write-Banner 'TXT session - Q / ESC to stop, or Ctrl+Alt+Q from any window'
     Write-Host "  Appending one character per second to: $Script:TextPath"
-    Write-Host '  Background mode: no editor window; F15 activity every 30 seconds.'
+    Write-Host '  Background mode: small mouse movement every 30 seconds while idle.'
+    Write-Host '  Movement waits for 30 seconds of inactivity and released mouse buttons/modifiers.'
     Write-Host '  You can minimize this console. Stop from any window with Ctrl+Alt+Q.'
     try {
         # Deny other writers to prevent overlapping sessions on the same file.
@@ -387,7 +389,7 @@ function Start-TextSession {
                 ([KeepAlive.NativeMethods]::GetAsyncKeyState(0x51) -band 0x8000)
             if ($stop -or $emergencyStop -or ($duration -gt 0 -and $clock.ElapsedMilliseconds -ge $duration)) { break }
             if ($clock.ElapsedMilliseconds -ge $nextActivity) {
-                if ([KeepAlive.NativeMethods]::SendActivityKey()) {
+                if ([KeepAlive.NativeMethods]::SendActivityMouse()) {
                     $activityCount++
                     $nextActivity = $clock.ElapsedMilliseconds + 30000
                 } else {
@@ -717,7 +719,7 @@ function Show-MainMenu {
         Write-Host '  4) Restore original settings'
         Write-Host '  5) Quick diagnostics'
         Write-Host '  6) Restart as administrator'
-        Write-Host '  7) Background TXT writing + keyboard activity'
+        Write-Host '  7) Background TXT writing + mouse activity (30 seconds)'
         Write-Host '  0) Exit'
         Write-Host ''
         switch (Read-Host '  Choice') {
